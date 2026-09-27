@@ -478,9 +478,9 @@ The cost depends on the Fabric SKU, the region, the number of subscriptions and 
 
 | Tier | Fabric SKU | Estimated per month | Estimated per year |
 |---|---|---|---|
-| Starter, for smaller estates | F4 | ~ $1,226 | ~ $14.7k |
-| **Recommended** | **F8** | **~ $2,381** | **~ $28.6k** |
-| Large estates | F16 | ~ $4,692 | ~ $56.3k |
+| Starter, for smaller estates | F4 | about $1,226 | about $14.7k |
+| **Recommended** | **F8** | **about $2,381** | **about $28.6k** |
+| Large estates | F16 | about $4,692 | about $56.3k |
 
 - The Fabric capacity is just over half of the total and is billed per hour while it is active. A one-year Fabric reservation lowers that part by about 40%.
 - Data Factory's managed private runtime is about 42% of the total. It is billed while data is processed, including its warm-up time, so it grows with the number of subscriptions.
