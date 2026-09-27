@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/hero-banner.jpg" alt="Azure FinOps Tool Deployment: Control, Optimize, Maximize" width="100%">
+</p>
+
 <div align="center">
 
 <img src="docs/images/logo.png" alt="Azure FinOps Workspace" width="88">
@@ -601,7 +605,20 @@ Run `Get-Help ./Deploy-FinOpsHub-V3-Fabric.ps1 -Full` for the complete help. Par
 
 ## Credits, support and license
 
-- **Solution developed by** Zahir Hussain Shah, Sr. Solution Engineer, Cloud & AI - Infra, Microsoft Qatar.
 - **Built on** the [Microsoft FinOps toolkit](https://github.com/microsoft/finops-toolkit). `template.json` and the `fabric` setup scripts come from FinOps toolkit release 14, and `finops-hub-dashboard.json` is the toolkit's FinOps hub dashboard. They are used under the toolkit's MIT License.
 - **Support.** This utility is provided as is. The Azure and Microsoft Fabric services it deploys are covered by your normal Microsoft support, but the script itself is community supported and is not an official Microsoft product. For questions or problems, open a [GitHub issue](https://github.com/zhshah/Azure-FinOps-Automation-Deployment-Utility/issues) or contact your Microsoft account team. Customers with a Unified support contract can also ask their Cloud Solution Architect to run the deployment with them.
 - **License.** MIT. See [LICENSE](LICENSE), which also contains the FinOps toolkit license notice.
+
+<p align="center">
+  <img src="docs/images/closing-banner.jpg" alt="Thank you" width="100%">
+</p>
+
+<div align="center">
+
+**Solution Developed:**
+
+Zahir Hussain Shah<br>
+Sr. Solution Engineer, Cloud & AI - Infra<br>
+Microsoft Qatar
+
+</div>
