@@ -1,0 +1,104 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.39.26.7824",
+      "templateHash": "9744980315657755627"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region of the virtual network. Private endpoints must be in the same region as their virtual network."
+      }
+    },
+    "subnetId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the subnet that hosts the private endpoints."
+      }
+    },
+    "privateEndpoints": {
+      "type": "array",
+      "metadata": {
+        "description": "Private endpoints to create. Each item: { name, privateLinkServiceId, groupId, privateDnsZoneIds[] }."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags to apply to the private endpoints."
+      }
+    }
+  },
+  "resources": [
+    {
+      "copy": {
+        "name": "privateEndpoint",
+        "count": "[length(parameters('privateEndpoints'))]"
+      },
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2024-05-01",
+      "name": "[parameters('privateEndpoints')[copyIndex()].name]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('subnetId')]"
+        },
+        "customNetworkInterfaceName": "[format('{0}-nic', parameters('privateEndpoints')[copyIndex()].name)]",
+        "privateLinkServiceConnections": [
+          {
+            "name": "[parameters('privateEndpoints')[copyIndex()].name]",
+            "properties": {
+              "privateLinkServiceId": "[parameters('privateEndpoints')[copyIndex()].privateLinkServiceId]",
+              "groupIds": [
+                "[parameters('privateEndpoints')[copyIndex()].groupId]"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "copy": {
+        "name": "privateDnsZoneGroup",
+        "count": "[length(parameters('privateEndpoints'))]"
+      },
+      "condition": "[not(empty(parameters('privateEndpoints')[copyIndex()].privateDnsZoneIds))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', parameters('privateEndpoints')[copyIndex()].name, 'default')]",
+      "properties": {
+        "copy": [
+          {
+            "name": "privateDnsZoneConfigs",
+            "count": "[length(parameters('privateEndpoints')[copyIndex()].privateDnsZoneIds)]",
+            "input": {
+              "name": "[replace(last(split(parameters('privateEndpoints')[copyIndex()].privateDnsZoneIds[copyIndex('privateDnsZoneConfigs')], '/')), '.', '-')]",
+              "properties": {
+                "privateDnsZoneId": "[parameters('privateEndpoints')[copyIndex()].privateDnsZoneIds[copyIndex('privateDnsZoneConfigs')]]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpoints')[copyIndex()].name)]"
+      ]
+    }
+  ],
+  "outputs": {
+    "privateEndpointIds": {
+      "type": "array",
+      "copy": {
+        "count": "[length(parameters('privateEndpoints'))]",
+        "input": "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpoints')[copyIndex()].name)]"
+      }
+    }
+  }
+}

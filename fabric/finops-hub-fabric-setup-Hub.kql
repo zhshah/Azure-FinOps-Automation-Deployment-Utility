@@ -1,0 +1,1259 @@
+.execute database script with (ContinueOnErrors=true)
+<|
+//
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+//======================================================================================================================
+// Common utility functions
+//
+// TIP: Use Ctrl+K,Ctrl+0 to collapse all regions in VS Code
+//======================================================================================================================
+//
+//===| Date functions |=================================================================================================
+//
+// monthstring
+.create-or-alter function 
+with (docstring = @'Returns the name of the month for the specified date (e.g. Jan or January)', folder =@'Common') 
+monthstring(['date']: datetime, length: int = 9)
+{
+    substring(dynamic(['January','February','March','April','May','June','July','August','September','October','November','December'])[getmonth(['date']) - 1], 0, length)
+}
+//
+// datestring
+.create-or-alter function 
+with (docstring = @'Converts 2 dates into a simple, user-friendly date range (e.g. Jan 1-Jan 3)', folder =@'Common') 
+datestring(start: datetime, end: datetime = datetime('0001-01-01'))
+{
+    let month = (d: datetime) { monthstring(d, 3) };
+    let endDate = iff(end == datetime('0001-01-01'), start, end);
+    let sameDate = startofday(start) == startofday(endDate);
+    let sameMonth = startofmonth(start) == startofmonth(endDate);
+    let sameYear = startofyear(start) == startofyear(endDate);
+    let fullMonth = startofday(start) == startofmonth(start) and startofday(endDate) == startofday(endofmonth(endDate));
+    let fullYear = startofday(start) == startofyear(start) and startofday(endDate) == startofday(endofyear(endDate));
+    let currentYear = sameYear and startofyear(start) == startofyear(now());
+    case(
+        // Full year             | yyyy (same year) / yyyy-yyyy (diff years)
+        fullYear,
+            strcat(getyear(start), iff(sameYear, '', strcat('-', getyear(endDate)))),
+        // 1 full mo, same year  | Mmm yyyy
+        fullMonth and sameMonth and sameYear,
+            strcat(month(start), ' ', getyear(start)),
+        // 2+ full mo, same year | Mmm-Mmm (current year) / Mmm-Mmm yyyy (other year)
+        fullMonth and sameYear,
+            strcat(month(start), '-', month(endDate), iff(currentYear, '', strcat(' ', getyear(endDate)))),
+        // Full mo, diff year    | Mmm yyyy-Mmm yyyy
+        fullMonth and not(sameYear),
+            strcat(month(start), ' ', getyear(start), '-', month(endDate), ' ', getyear(endDate)),
+        // Same date             | Mmm d (current year) / Mmm d, yyyy (other year)
+        sameDate,
+            strcat(month(start), ' ', dayofmonth(start), iff(currentYear, '', strcat(', ', getyear(endDate)))),
+        // 1 partial M, same Y   | Mmm d-d (current year) / Mmm d-d, yyyy (other year)
+        not(fullMonth) and sameMonth and sameYear,
+            strcat(month(start), ' ', dayofmonth(start), '-', dayofmonth(endDate), iff(currentYear, '', strcat(' ', getyear(endDate)))),
+        // 2+ partial M, same Y  | Mmm d-Mmm d (current year) / Mmm d-Mmm d, yyyy (other year)
+        not(fullMonth) and not(sameMonth) and sameYear,
+            strcat(month(start), ' ', dayofmonth(start), '-', month(endDate), ' ', dayofmonth(endDate), iff(currentYear, '', strcat(', ', getyear(endDate)))),
+        // All other cases       | Mmm d, yyyy-Mmm d, yyyy
+        strcat(month(start), ' ', dayofmonth(start), ', ', getyear(start), '-', month(endDate), ' ', dayofmonth(endDate), ', ', getyear(endDate))
+    )
+}
+//
+// daterange
+.create-or-alter function 
+with (docstring = @'DEPRECATED: Please use datestring(); function will be removed on or after the Jan 2026 release', folder =@'Common') 
+daterange(start: datetime, end: datetime = datetime('0001-01-01'))
+{
+    datestring(start, end)
+}
+//
+// monthsago
+.create-or-alter function 
+with (docstring = 'DEPRECATED: Please use startofmonth(now(), -<# of months>); function will be removed on or after the Jan 2026 release', folder = 'Common')
+monthsago(months: int)
+{
+    datetime_add('month', -months, startofmonth(now()))
+}
+//
+//===| Number functions |===============================================================================================
+// NOTE: Must be defined before string converters
+//
+// delta
+.create-or-alter function 
+with (docstring = @'Compares 2 values and returns the percentage change from oldval to newval', folder =@'Common') 
+delta(oldval: double, newval: double)
+{
+    (newval - todouble(oldval))/oldval
+}
+//
+// percentOfTotal
+// NOTE: Must be before percent() function
+.create-or-alter function 
+with (docstring = @'Calculates the percentage of each record based on a required Count column', folder =@'Common') 
+percentOfTotal(t: (Count: long), tot: long)
+{
+    let total = todouble(tot);
+    t 
+    | extend Percent = round(Count / total * 100, 3) 
+    | order by Count desc
+}
+//
+// percent
+.create-or-alter function 
+with (docstring = @'Calculates the percentage of each record based on a required Count column', folder =@'Common') 
+percent(t: (Count: long))
+{
+    let total = todouble(toscalar(t | summarize sum(Count)));
+    percentOfTotal(t, total)
+}
+//
+// plusminus
+.create-or-alter function 
+with (docstring = 'Shows a +/- sign based on the direction of the number', folder = 'Common')
+plusminus(val: string)
+{
+    let neg = substring(val, 0, 1) == '-';
+    iff(neg, val, strcat('+', val))
+}
+//
+// updown
+.create-or-alter function 
+with (docstring = 'Shows an up/down arrow based on the direction of the number', folder = 'Common')
+updown(val: string)
+{
+    // TODO: Handle 0
+    let neg = substring(val, 0, 1) == '-';
+    iff(neg, strcat('↓', substring(val, 1)), strcat('↑', val))
+}
+//
+//===| String functions |===============================================================================================
+//
+// percentstring
+// NOTE: Must be defined before deltastring
+.create-or-alter function 
+with (docstring = 'Calculate a percentage and render as a string', folder = 'Common')
+percentstring(num: double, total: double = 1.0, places: int = 9)
+{
+    let value = 1.0 * num / total * 100;
+    strcat(case(
+        places != 9, round(value, places),
+        value < 10,  round(value, 2),
+        round(value, 1)
+    ), '%')
+}
+//
+//----------------------------------------------------------------------------------------------------------------------
+//
+// arraystring
+.create-or-alter function 
+with (docstring = 'Convert an array to a comma-delimited string', folder = 'Common')
+arraystring(arr: dynamic)
+{
+    replace_string(replace_regex(replace_regex(replace_regex(replace_regex(replace_regex(
+        tostring(arr)
+        , @'^\["', '')
+        , @'"\]$', '')
+        , @'^, ', '')
+        , @', $', '')
+        , @'^\[]$', '')
+        , '","', ', ')
+}
+//
+// deltastring
+.create-or-alter function 
+with (docstring = 'Calculate a delta percentage and render as a string', folder = 'Common')
+deltastring(oldval: double, newval: double, places: int = 1, useArrows: bool = false)
+{
+    let d = delta(oldval, newval);
+    strcat(case(useArrows and d > 0, '↑', useArrows and d < 0, '↓', d < 0, '-', ''), percentstring(abs(d), 1, places))
+}
+//
+// diffstring
+.create-or-alter function 
+with (docstring = 'Calculate the difference and render as a string', folder = 'Common')
+diffstring(oldval: double, newval: double, places: int = 1)
+{
+    plusminus(round(newval - oldval, places))
+}
+//
+// numberstring
+.create-or-alter function 
+with (docstring = 'Convert a number to a string', folder = 'Common')
+numberstring(num: double, abbrev: bool = true)
+{
+    replace_regex(case(
+        num >= 10000000000000, strcat(round(1.0 * num / 1000000000000, 1), 'T'),
+        num >= 1000000000000,  strcat(round(1.0 * num / 1000000000000, 2), 'T'),
+        num >= 10000000000,    strcat(round(1.0 * num / 1000000000, 1), 'B'),
+        num >= 1000000000,     strcat(round(1.0 * num / 1000000000, 2), 'B'),
+        num >= 10000000,       strcat(round(1.0 * num / 1000000, 1), 'M'),
+        num >= 1000000,        strcat(round(1.0 * num / 1000000, 2), 'M'),
+        num >= 10000,          strcat(round(1.0 * num / 1000, 1), 'K'),
+        // Kusto doesn't support back-refs yet -- num > 1000, replace_regex(tostring(num), @'(\d)(?=(\d{3})+\.)', @'\1,'), // See https://docs.microsoft.com/azure/data-explorer/kusto/query/re2-library
+        num > 1000, replace_regex(tostring(num), @'([0-9]{3})$', @',\1'), //num / 1000, ',', substring(tostring(num), 0) - (num / 1000 * 1000)),
+        tostring(num)
+    ), @'\.0$', '')
+}
+//
+//===| Other |==========================================================================================================
+//
+// ifempty
+.create-or-alter function 
+with (docstring = 'Replaces an empty value with the specified default value', folder = 'Common')
+ifempty(val: dynamic, defaultVal: dynamic)
+{
+    iff(isempty(val), defaultVal, val)
+}
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+//======================================================================================================================
+// Hub database / Open data functions
+// Wrap Ingestion database tables for easy access.
+//======================================================================================================================
+//
+// For allowed commands, see https://learn.microsoft.com/azure/data-explorer/database-script
+//
+// PricingUnits
+.create-or-alter function
+with (docstring = 'Gets pricing units from the FinOps toolkit PricingUnits open data.', folder = 'OpenData')
+PricingUnits()
+{
+    database('Ingestion').PricingUnits
+}
+//
+// Regions
+.create-or-alter function
+with (docstring = 'Gets regions from the FinOps toolkit Regions open data.', folder = 'OpenData')
+Region()
+{
+    database('Ingestion').Regions
+}
+//
+// ResourceTypes
+.create-or-alter function
+with (docstring = 'Gets resource types from the FinOps toolkit ResourceTypes open data.', folder = 'OpenData')
+ResourceType()
+{
+    database('Ingestion').ResourceTypes
+}
+//
+// Services
+.create-or-alter function
+with (docstring = 'Gets services from the FinOps toolkit Services open data.', folder = 'OpenData')
+Services()
+{
+    database('Ingestion').Services
+}
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+//======================================================================================================================
+// Hub database / FOCUS 1.0 functions
+// Used for reporting with backward compatibility.
+//======================================================================================================================
+//
+// For allowed commands, see https://learn.microsoft.com/azure/data-explorer/database-script
+//
+// CommitmentDiscountUsage_final_v1_0
+.create-or-alter function
+with (docstring = 'Gets all commitment discount usage records aligned to FOCUS 1.0.', folder = 'CommitmentDiscountUsage')
+CommitmentDiscountUsage_v1_0()
+{
+    database('Ingestion').CommitmentDiscountUsage_final_v1_0
+    | union (
+        database('Ingestion').CommitmentDiscountUsage_final_v1_2
+        // Convert real to decimal
+        | extend
+            CommitmentDiscountQuantity          = todecimal(CommitmentDiscountQuantity),
+            ConsumedQuantity                    = todecimal(ConsumedQuantity),
+            x_CommitmentDiscountCommittedCount  = todecimal(x_CommitmentDiscountCommittedCount),
+            x_CommitmentDiscountCommittedAmount = todecimal(x_CommitmentDiscountCommittedAmount),
+            x_CommitmentDiscountNormalizedRatio = todecimal(x_CommitmentDiscountNormalizedRatio)
+    )
+    | project
+        ChargePeriodEnd,
+        ChargePeriodStart,
+        CommitmentDiscountCategory,
+        CommitmentDiscountId,
+        CommitmentDiscountType,
+        ConsumedQuantity,
+        ProviderName,
+        ResourceId,
+        ResourceName,
+        ResourceType,
+        ServiceCategory,
+        ServiceName,
+        SubAccountId,
+        x_CommitmentDiscountCommittedCount,
+        x_CommitmentDiscountCommittedAmount,
+        x_CommitmentDiscountNormalizedGroup,
+        x_CommitmentDiscountNormalizedRatio,
+        x_CommitmentDiscountQuantity,
+        x_IngestionTime,
+        x_ResourceGroupName,
+        x_ResourceType,
+        x_ServiceModel,
+        x_SkuOrderId,
+        x_SkuSize,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion
+}
+//
+// Costs_final_v1_0
+.create-or-alter function
+with (docstring = 'Gets all cost and usage records aligned to FOCUS 1.0.', folder = 'Costs')
+Costs_v1_0()
+{
+    database('Ingestion').Costs_final_v1_0
+    | union (
+        database('Ingestion').Costs_final_v1_2
+        // Convert real to decimal
+        | extend
+            BilledCost                          = todecimal(BilledCost),
+            CommitmentDiscountQuantity          = todecimal(CommitmentDiscountQuantity),
+            ConsumedQuantity                    = todecimal(ConsumedQuantity),
+            ContractedCost                      = todecimal(ContractedCost),
+            ContractedUnitPrice                 = todecimal(ContractedUnitPrice),
+            EffectiveCost                       = todecimal(EffectiveCost),
+            ListCost                            = todecimal(ListCost),
+            ListUnitPrice                       = todecimal(ListUnitPrice),
+            PricingQuantity                     = todecimal(PricingQuantity),
+            x_BilledCostInUsd                   = todecimal(x_BilledCostInUsd),
+            x_BilledUnitPrice                   = todecimal(x_BilledUnitPrice),
+            x_BillingExchangeRate               = todecimal(x_BillingExchangeRate),
+            x_CommitmentDiscountNormalizedRatio = todecimal(x_CommitmentDiscountNormalizedRatio),
+            x_ContractedCostInUsd               = todecimal(x_ContractedCostInUsd),
+            x_CurrencyConversionRate            = todecimal(x_CurrencyConversionRate),
+            x_EffectiveCostInUsd                = todecimal(x_EffectiveCostInUsd),
+            x_EffectiveUnitPrice                = todecimal(x_EffectiveUnitPrice),
+            x_ListCostInUsd                     = todecimal(x_ListCostInUsd),
+            x_PricingBlockSize                  = todecimal(x_PricingBlockSize)
+        // Rename columns
+        | project-rename
+            x_InvoiceId = InvoiceId,
+            x_PricingCurrency = PricingCurrency,
+            x_SkuMeterName = SkuMeter
+        // Generate historical x_SkuDetails format from SkuPriceDetails
+        | extend x_SkuDetails = iff(isnotempty(x_SkuDetails), x_SkuDetails, parse_json(replace_regex(tostring(SkuPriceDetails), @'([\{,])"x_', @'\1"')))
+    )
+    | project
+        AvailabilityZone,
+        BilledCost,
+        BillingAccountId,
+        BillingAccountName,
+        BillingAccountType,
+        BillingCurrency,
+        BillingPeriodEnd,
+        BillingPeriodStart,
+        ChargeCategory,
+        ChargeClass,
+        ChargeDescription,
+        ChargeFrequency,
+        ChargePeriodEnd,
+        ChargePeriodStart,
+        CommitmentDiscountCategory,
+        CommitmentDiscountId,
+        CommitmentDiscountName,
+        CommitmentDiscountStatus,
+        CommitmentDiscountType,
+        ConsumedQuantity,
+        ConsumedUnit,
+        ContractedCost,
+        ContractedUnitPrice,
+        EffectiveCost,
+        InvoiceIssuerName,
+        ListCost,
+        ListUnitPrice,
+        PricingCategory,
+        PricingQuantity,
+        PricingUnit,
+        ProviderName,
+        PublisherName,
+        RegionId,
+        RegionName,
+        ResourceId,
+        ResourceName,
+        ResourceType,
+        ServiceCategory,
+        ServiceName,
+        SkuId,
+        SkuPriceId,
+        SubAccountId,
+        SubAccountName,
+        SubAccountType,
+        Tags,
+        x_AccountId,
+        x_AccountName,
+        x_AccountOwnerId,
+        x_BilledCostInUsd,
+        x_BilledUnitPrice,
+        x_BillingAccountAgreement,
+        x_BillingAccountId,
+        x_BillingAccountName,
+        x_BillingExchangeRate,
+        x_BillingExchangeRateDate,
+        x_BillingProfileId,
+        x_BillingProfileName,
+        x_ChargeId,
+        x_ContractedCostInUsd,
+        x_CostAllocationRuleName,
+        x_CostCategories,
+        x_CostCenter,
+        x_Credits,
+        x_CostType,
+        x_CurrencyConversionRate,
+        x_CustomerId,
+        x_CustomerName,
+        x_Discount,
+        x_EffectiveCostInUsd,
+        x_EffectiveUnitPrice,
+        x_ExportTime,
+        x_IngestionTime,
+        x_InvoiceId,
+        x_InvoiceIssuerId,
+        x_InvoiceSectionId,
+        x_InvoiceSectionName,
+        x_ListCostInUsd,
+        x_Location,
+        x_Operation,
+        x_PartnerCreditApplied,
+        x_PartnerCreditRate,
+        x_PricingBlockSize,
+        x_PricingCurrency,
+        x_PricingSubcategory,
+        x_PricingUnitDescription,
+        x_Project,
+        x_PublisherCategory,
+        x_PublisherId,
+        x_ResellerId,
+        x_ResellerName,
+        x_ResourceGroupName,
+        x_ResourceType,
+        x_ServiceCode,
+        x_ServiceId,
+        x_ServicePeriodEnd,
+        x_ServicePeriodStart,
+        x_SkuDescription,
+        x_SkuDetails,
+        x_SkuIsCreditEligible,
+        x_SkuMeterCategory,
+        x_SkuMeterId,
+        x_SkuMeterName,
+        x_SkuMeterSubcategory,
+        x_SkuOfferId,
+        x_SkuOrderId,
+        x_SkuOrderName,
+        x_SkuPartNumber,
+        x_SkuRegion,
+        x_SkuServiceFamily,
+        x_SkuTerm,
+        x_SkuTier,
+        x_SourceChanges,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion,
+        x_UsageType
+}
+//
+// Prices_final_v1_0
+.create-or-alter function
+with (docstring = 'Gets all prices aligned to FOCUS 1.0.', folder = 'Prices')
+Prices_v1_0()
+{
+    database('Ingestion').Prices_final_v1_0
+    | union (
+        database('Ingestion').Prices_final_v1_2
+        // Convert real to decimal
+        | extend
+            ContractedUnitPrice                  = todecimal(ContractedUnitPrice),
+            ListUnitPrice                        = todecimal(ListUnitPrice),
+            x_BaseUnitPrice                      = todecimal(x_BaseUnitPrice),
+            x_CommitmentDiscountNormalizedRatio  = todecimal(x_CommitmentDiscountNormalizedRatio),
+            x_ContractedUnitPriceDiscount        = todecimal(x_ContractedUnitPriceDiscount),
+            x_ContractedUnitPriceDiscountPercent = todecimal(x_ContractedUnitPriceDiscountPercent),
+            x_EffectiveUnitPrice                 = todecimal(x_EffectiveUnitPrice),
+            x_EffectiveUnitPriceDiscount         = todecimal(x_EffectiveUnitPriceDiscount),
+            x_EffectiveUnitPriceDiscountPercent  = todecimal(x_EffectiveUnitPriceDiscountPercent),
+            x_PricingBlockSize                   = todecimal(x_PricingBlockSize),
+            x_SkuIncludedQuantity                = todecimal(x_SkuIncludedQuantity),
+            x_SkuTier                            = todecimal(x_SkuTier),
+            x_TotalUnitPriceDiscount             = todecimal(x_TotalUnitPriceDiscount),
+            x_TotalUnitPriceDiscountPercent      = todecimal(x_TotalUnitPriceDiscountPercent) 
+        // Rename columns
+        | project-rename
+            x_PricingCurrency = PricingCurrency,
+            x_SkuMeterName = SkuMeter
+    )
+    | project
+        BillingAccountId,
+        BillingAccountName,
+        BillingCurrency,
+        ChargeCategory,
+        CommitmentDiscountCategory,
+        CommitmentDiscountType,
+        ContractedUnitPrice,
+        ListUnitPrice,
+        PricingCategory,
+        PricingUnit,
+        SkuId,
+        SkuPriceId,
+        SkuPriceIdv2,
+        x_BaseUnitPrice,
+        x_BillingAccountAgreement,
+        x_BillingAccountId,
+        x_BillingProfileId,
+        x_CommitmentDiscountSpendEligibility,
+        x_CommitmentDiscountUsageEligibility,
+        x_ContractedUnitPriceDiscount,
+        x_ContractedUnitPriceDiscountPercent,
+        x_EffectivePeriodEnd,
+        x_EffectivePeriodStart,
+        x_EffectiveUnitPrice,
+        x_EffectiveUnitPriceDiscount,
+        x_EffectiveUnitPriceDiscountPercent,
+        x_IngestionTime,
+        x_PricingBlockSize,
+        x_PricingCurrency,
+        x_PricingSubcategory,
+        x_PricingUnitDescription,
+        x_SkuDescription,
+        x_SkuId,
+        x_SkuIncludedQuantity,
+        x_SkuMeterCategory,
+        x_SkuMeterId,
+        x_SkuMeterName,
+        x_SkuMeterSubcategory,
+        x_SkuMeterType,
+        x_SkuPriceType,
+        x_SkuProductId,
+        x_SkuRegion,
+        x_SkuServiceFamily,
+        x_SkuOfferId,
+        x_SkuPartNumber,
+        x_SkuTerm,
+        x_SkuTier,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion,
+        x_TotalUnitPriceDiscount,
+        x_TotalUnitPriceDiscountPercent
+}
+//
+// Recommendations_final_v1_0
+.create-or-alter function
+with (docstring = 'Gets all recommendations aligned to FOCUS 1.0.', folder = 'Recommendations')
+Recommendations_v1_0()
+{
+    database('Ingestion').Recommendations_final_v1_0
+    | union (
+        database('Ingestion').Recommendations_final_v1_2
+        // Convert real to decimal
+        | extend
+            x_EffectiveCostAfter   = todecimal(x_EffectiveCostAfter),
+            x_EffectiveCostBefore  = todecimal(x_EffectiveCostBefore),
+            x_EffectiveCostSavings = todecimal(x_EffectiveCostSavings)
+    )
+    | project
+        ProviderName,
+        SubAccountId,
+        x_IngestionTime,
+        x_EffectiveCostAfter,
+        x_EffectiveCostBefore,
+        x_EffectiveCostSavings,
+        x_RecommendationDate,
+        x_RecommendationDetails,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion
+}
+//
+// Transactions_final_v1_0
+.create-or-alter function
+with (docstring = 'Gets all transactions aligned to FOCUS 1.0.', folder = 'Transactions')
+Transactions_v1_0()
+{
+    database('Ingestion').Transactions_final_v1_0
+    | union (
+        database('Ingestion').Transactions_final_v1_2
+        // Convert real to decimal
+        | extend
+            BilledCost           = todecimal(BilledCost),
+            PricingQuantity      = todecimal(PricingQuantity),
+            x_MonetaryCommitment = todecimal(x_MonetaryCommitment),
+            x_Overage            = todecimal(x_Overage)
+        // Rename columns
+        | project-rename
+            x_InvoiceId = InvoiceId
+    )
+    | project
+        BilledCost,
+        BillingAccountId,
+        BillingAccountName,
+        BillingCurrency,
+        BillingPeriodEnd,
+        BillingPeriodStart,
+        ChargeCategory,
+        ChargeClass,
+        ChargeDescription,
+        ChargeFrequency,
+        ChargePeriodStart,
+        PricingQuantity,
+        PricingUnit,
+        ProviderName,
+        RegionId,
+        RegionName,
+        SubAccountId,
+        SubAccountName,
+        x_AccountName,
+        x_AccountOwnerId,
+        x_CostCenter,
+        x_InvoiceId,
+        x_InvoiceNumber,
+        x_InvoiceSectionId,
+        x_InvoiceSectionName,
+        x_IngestionTime,
+        x_MonetaryCommitment,
+        x_Overage,
+        x_PurchasingBillingAccountId,
+        x_SkuOrderId,
+        x_SkuOrderName,
+        x_SkuSize,
+        x_SkuTerm,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion,
+        x_SubscriptionId,
+        x_TransactionType
+}
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+//======================================================================================================================
+// Hub database / FOCUS 1.2 functions
+// Used for reporting with backward compatibility.
+//======================================================================================================================
+//
+// For allowed commands, see https://learn.microsoft.com/azure/data-explorer/database-script
+//
+// CommitmentDiscountUsage_final_v1_2
+.create-or-alter function
+with (docstring = 'Gets all commitment discount usage records aligned to FOCUS 1.2.', folder = 'CommitmentDiscountUsage')
+CommitmentDiscountUsage_v1_2()
+{
+    database('Ingestion').CommitmentDiscountUsage_final_v1_2
+    | union (
+        database('Ingestion').CommitmentDiscountUsage_final_v1_0
+        // Convert decimal to real
+        | extend
+            ConsumedQuantity                    = toreal(ConsumedQuantity),
+            x_CommitmentDiscountCommittedCount  = toreal(x_CommitmentDiscountCommittedCount),
+            x_CommitmentDiscountCommittedAmount = toreal(x_CommitmentDiscountCommittedAmount),
+            x_CommitmentDiscountNormalizedRatio = toreal(x_CommitmentDiscountNormalizedRatio)
+        // Add new columns
+        | lookup kind=leftouter (Services | distinct x_ResourceType, ServiceSubcategory) on x_ResourceType
+        | extend CommitmentDiscountQuantity = ConsumedQuantity * x_CommitmentDiscountNormalizedRatio
+        | extend CommitmentDiscountUnit = case(
+            x_CommitmentDiscountNormalizedRatio == 1, 'Hours',
+            x_CommitmentDiscountNormalizedRatio > 1, 'Normalized Hours',
+            ''
+        )
+    )
+    | project
+        ChargePeriodEnd,
+        ChargePeriodStart,
+        CommitmentDiscountCategory,
+        CommitmentDiscountId,
+        CommitmentDiscountQuantity,
+        CommitmentDiscountType,
+        CommitmentDiscountUnit,
+        ConsumedQuantity,
+        ProviderName,
+        ResourceId,
+        ResourceName,
+        ResourceType,
+        ServiceCategory,
+        ServiceName,
+        ServiceSubcategory,
+        SubAccountId,
+        x_CommitmentDiscountCommittedCount,
+        x_CommitmentDiscountCommittedAmount,
+        x_CommitmentDiscountNormalizedGroup,
+        x_CommitmentDiscountNormalizedRatio,
+        x_IngestionTime,
+        x_ResourceGroupName,
+        x_ResourceType,
+        x_ServiceModel,
+        x_SkuOrderId,
+        x_SkuSize,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion
+}
+//
+// Costs_final_v1_2
+.create-or-alter function
+with (docstring = 'Gets all cost and usage records aligned to FOCUS 1.2.', folder = 'Costs')
+Costs_v1_2()
+{
+    database('Ingestion').Costs_final_v1_2
+    | union (
+        database('Ingestion').Costs_final_v1_0
+        // Convert decimal to real
+        | extend
+            BilledCost                          = toreal(BilledCost),
+            ConsumedQuantity                    = toreal(ConsumedQuantity),
+            ContractedCost                      = toreal(ContractedCost),
+            ContractedUnitPrice                 = toreal(ContractedUnitPrice),
+            EffectiveCost                       = toreal(EffectiveCost),
+            ListCost                            = toreal(ListCost),
+            ListUnitPrice                       = toreal(ListUnitPrice),
+            PricingQuantity                     = toreal(PricingQuantity),
+            x_BilledCostInUsd                   = toreal(x_BilledCostInUsd),
+            x_BilledUnitPrice                   = toreal(x_BilledUnitPrice),
+            x_BillingExchangeRate               = toreal(x_BillingExchangeRate),
+            x_ContractedCostInUsd               = toreal(x_ContractedCostInUsd),
+            x_CurrencyConversionRate            = toreal(x_CurrencyConversionRate),
+            x_EffectiveCostInUsd                = toreal(x_EffectiveCostInUsd),
+            x_EffectiveUnitPrice                = toreal(x_EffectiveUnitPrice),
+            x_ListCostInUsd                     = toreal(x_ListCostInUsd),
+            x_PricingBlockSize                  = toreal(x_PricingBlockSize)
+        // Rename columns
+        | project-rename
+            InvoiceId = x_InvoiceId,
+            PricingCurrency = x_PricingCurrency,
+            SkuMeter = x_SkuMeterName
+        // Add new columns
+        | lookup kind=leftouter (Services | where isnotempty(x_ResourceType) | summarize take_any(ServiceSubcategory), take_any(x_ServiceModel) by x_ResourceType) on x_ResourceType
+        | extend CapacityReservationId = tostring(x_SkuDetails.VMCapacityReservationId)
+        | extend CapacityReservationStatus = case(
+            isempty(CapacityReservationId), '',
+            tolower(x_ResourceType) == 'microsoft.compute/capacityreservationgroups/capacityreservations', 'Unused',
+            'Used'
+        )
+        | extend x_CommitmentDiscountNormalizedRatio = case(
+            // Not applicable
+            isempty(CommitmentDiscountStatus), real(null),
+            // Parse from SKU details if not specified explicitly
+            toreal(coalesce(x_SkuDetails.RINormalizationRatio, dynamic(1)))
+        )
+        | extend CommitmentDiscountQuantity = case(
+            isempty(CommitmentDiscountStatus), real(null),
+            CommitmentDiscountCategory == 'Spend', EffectiveCost / coalesce(x_BillingExchangeRate, real(1)),
+            CommitmentDiscountCategory == 'Usage' and isnotempty(x_CommitmentDiscountNormalizedRatio), PricingQuantity / coalesce(x_PricingBlockSize, real(1)) * x_CommitmentDiscountNormalizedRatio,
+            real(null)
+        )
+        | extend CommitmentDiscountUnit = case(
+            isempty(CommitmentDiscountQuantity), '',
+            CommitmentDiscountCategory == 'Spend', PricingCurrency,
+            CommitmentDiscountCategory == 'Usage' and x_CommitmentDiscountNormalizedRatio == real(1), ConsumedUnit,
+            CommitmentDiscountCategory == 'Usage' and x_CommitmentDiscountNormalizedRatio > real(1), strcat('Normalized ', ConsumedUnit),
+            ''
+        )
+        | extend x_AmortizationClass = case(
+            ChargeCategory == 'Purchase' and (tolower(ResourceId) contains '/microsoft.capacity/reservationorders/' or tolower(ResourceId) contains '/microsoft.billingbenefits/savingsplanorders/'), 'Principal',
+            ChargeCategory == 'Usage' and isnotempty(CommitmentDiscountId) and isnotempty(CommitmentDiscountStatus), 'Amortized Charge',
+            ''
+        )
+        // Hubs add-ons
+        | extend x_CommitmentDiscountUtilizationPotential = case(
+            ChargeCategory == 'Purchase', real(0),
+            ProviderName == 'Microsoft' and isnotempty(CommitmentDiscountCategory), EffectiveCost,
+            CommitmentDiscountCategory == 'Usage', ConsumedQuantity,
+            CommitmentDiscountCategory == 'Spend', EffectiveCost,
+            real(0)
+        )
+        | extend x_CommitmentDiscountUtilizationAmount = iff(CommitmentDiscountStatus == 'Used', x_CommitmentDiscountUtilizationPotential, real(0))
+        | extend x_SkuCoreCount = toint(coalesce(x_SkuDetails.VCPUs, x_SkuDetails.VCores, x_SkuDetails.vCores))
+        | extend x_SkuInstanceType = tostring(coalesce(x_SkuDetails.ServiceType, x_SkuDetails.ServerSku))
+        | extend x_SkuOperatingSystem = case(
+            x_SkuDetails.ImageType == 'Canonical', 'Linux',
+            x_SkuDetails.ImageType == 'Windows Server BYOL', 'Windows Server',
+            x_SkuMeterSubcategory endswith ' Series Windows', 'Windows Server',
+            x_SkuDetails.ImageType
+        )
+        | extend x_ConsumedCoreHours = iff(ConsumedUnit == 'Hours' and isnotempty(x_SkuCoreCount), x_SkuCoreCount * ConsumedQuantity, real(null))
+        | extend tmp_SqlAhb = tolower(x_SkuDetails.AHB)
+        | extend x_SkuLicenseType = case(
+            x_SkuDetails.ImageType contains 'Windows Server BYOL', 'Windows Server',
+            x_SkuMeterSubcategory == 'SQL Server Azure Hybrid Benefit', 'SQL Server',
+            ''
+        )
+        | extend x_SkuLicenseStatus = case(
+            isnotempty(x_SkuLicenseType) or tmp_SqlAhb == 'true' or (x_SkuMeterSubcategory contains 'Azure Hybrid Benefit'), 'Enabled',
+            (x_SkuMeterSubcategory contains 'Windows') or tmp_SqlAhb == 'false', 'Not enabled',
+            ''
+        )
+        | extend x_SkuLicenseQuantity = case(
+            isempty(x_SkuCoreCount), int(null),
+            x_SkuCoreCount <= 8, int(8),
+            x_SkuCoreCount > 8, x_SkuCoreCount,
+            int(null)
+        )
+        | extend x_SkuLicenseUnit = iff(isnotempty(x_SkuLicenseQuantity), 'Cores', '')
+        | extend x_CommitmentDiscountSavings = iff(ContractedCost < EffectiveCost,  real(0), ContractedCost - EffectiveCost)
+        | extend x_NegotiatedDiscountSavings = iff(ListCost       < ContractedCost, real(0), ListCost - ContractedCost)
+        | extend x_TotalSavings              = iff(ListCost       < EffectiveCost,  real(0), ListCost - EffectiveCost)
+        | extend x_CommitmentDiscountPercent = iff(ContractedUnitPrice == 0,        real(0), (ContractedUnitPrice - x_EffectiveUnitPrice) / ContractedUnitPrice)
+        | extend x_NegotiatedDiscountPercent = iff(ListUnitPrice == 0,              real(0), (ListUnitPrice - ContractedUnitPrice) / ListUnitPrice)
+        | extend x_TotalDiscountPercent      = iff(ListUnitPrice == 0,              real(0), (ListUnitPrice - x_EffectiveUnitPrice) / ListUnitPrice)
+        // SkuPriceDetails conversion -- Must be after hubs add-ons
+        | extend SkuPriceDetails = parse_json(replace_regex(replace_regex(replace_regex(replace_regex(replace_regex(replace_regex(tostring(x_SkuDetails)
+            // Prefix all keys with x_ first to avoid double-prefixing
+            , @'([\{,])"', @'\1"x_')
+            // CoreCount for number of CPUs/vCPUs/cores/vCores
+            , @'"x_(VCPUs|VCores|vCores)":', @'"CoreCount":')
+            // TODO: DiskMaxIops for disk I/O operations per second (IOPS)
+            // TODO: DiskSpace for disk size in GiB
+            // TODO: DiskType for the kind of disk (e.g., SSD, HDD, NVMe)
+            // TODO: GpuCount for the number of GPUs
+            // InstanceType for the resource size/SKU (e.g., ArmSkuName)
+            , @'"x_(ServerSku|ServiceType)":', @'"InstanceType":')
+            // TODO: InstanceSeries for the size family/series
+            // TODO: MemorySize for the RAM in GiB
+            // TODO: NetworkMaxIops for network I/O operations per second (IOPS)
+            // TODO: NetworkMaxThroughput for network max throughput for data transfer in Mbps
+            // OperatingSystem for the OS name
+            , @'("x_ImageType":"Canonical")', @'\1,"OperatingSystem":"Linux"')
+            , @'("x_ImageType":"Windows Server( BYOL)?")', @'\1,"OperatingSystem":"Windows Server"')
+            , @'("x_ImageType":("[^"]+"))', @'\1,"OperatingSystem":\2')
+            // TODO: Redundancy for the level of redundancy (e.g., Local, Zonal, Global)
+            // TODO: StorageClass for the tier of storage (e.g., Hot, Archive, Nearline)
+        )
+        | extend SkuPriceDetails = iff(isempty(SkuPriceDetails.OperatingSystem) and isnotempty(x_SkuOperatingSystem),
+            parse_json(replace_string(tostring(SkuPriceDetails), '}', strcat(@',"OperatingSystem":"', x_SkuOperatingSystem, '"}'))),
+            SkuPriceDetails)
+    )
+    | extend SkuPriceDetails = iff(isnotempty(SkuPriceDetails), SkuPriceDetails, parse_json(replace_regex(tostring(x_SkuDetails), @'([\{,])"', @'\1"x_')))
+    | project
+        AvailabilityZone,
+        BilledCost,
+        BillingAccountId,
+        BillingAccountName,
+        BillingAccountType,
+        BillingCurrency,
+        BillingPeriodEnd,
+        BillingPeriodStart,
+        CapacityReservationId,
+        CapacityReservationStatus,
+        ChargeCategory,
+        ChargeClass,
+        ChargeDescription,
+        ChargeFrequency,
+        ChargePeriodEnd,
+        ChargePeriodStart,
+        CommitmentDiscountCategory,
+        CommitmentDiscountId,
+        CommitmentDiscountName,
+        CommitmentDiscountQuantity,
+        CommitmentDiscountStatus,
+        CommitmentDiscountType,
+        CommitmentDiscountUnit,
+        ConsumedQuantity,
+        ConsumedUnit,
+        ContractedCost,
+        ContractedUnitPrice,
+        EffectiveCost,
+        InvoiceId,
+        InvoiceIssuerName,
+        ListCost,
+        ListUnitPrice,
+        PricingCategory,
+        PricingCurrency,
+        PricingQuantity,
+        PricingUnit,
+        ProviderName,
+        PublisherName,
+        RegionId,
+        RegionName,
+        ResourceId,
+        ResourceName,
+        ResourceType,
+        ServiceCategory,
+        ServiceName,
+        ServiceSubcategory,
+        SkuId,
+        SkuMeter,
+        SkuPriceDetails,
+        SkuPriceId,
+        SubAccountId,
+        SubAccountName,
+        SubAccountType,
+        Tags,
+        x_AccountId,
+        x_AccountName,
+        x_AccountOwnerId,
+        x_AmortizationClass,
+        x_BilledCostInUsd,
+        x_BilledUnitPrice,
+        x_BillingAccountAgreement,
+        x_BillingAccountId,
+        x_BillingAccountName,
+        x_BillingExchangeRate,
+        x_BillingExchangeRateDate,
+        x_BillingItemCode,
+        x_BillingItemName,
+        x_BillingProfileId,
+        x_BillingProfileName,
+        x_ChargeId,
+        x_CommitmentDiscountNormalizedRatio,
+        x_CommitmentDiscountPercent,
+        x_CommitmentDiscountSavings,
+        x_CommitmentDiscountSpendEligibility,
+        x_CommitmentDiscountUsageEligibility,
+        x_CommitmentDiscountUtilizationAmount,
+        x_CommitmentDiscountUtilizationPotential,
+        x_CommodityCode,
+        x_CommodityName,
+        x_ComponentName,
+        x_ComponentType,
+        x_ConsumedCoreHours,
+        x_ContractedCostInUsd,
+        x_CostAllocationRuleName,
+        x_CostCategories,
+        x_CostCenter,
+        x_CostType,
+        x_Credits,
+        x_CurrencyConversionRate,
+        x_CustomerId,
+        x_CustomerName,
+        x_Discount,
+        x_EffectiveCostInUsd,
+        x_EffectiveUnitPrice,
+        x_ExportTime,
+        x_IngestionTime,
+        x_InstanceID,
+        x_InvoiceIssuerId,
+        x_InvoiceSectionId,
+        x_InvoiceSectionName,
+        x_ListCostInUsd,
+        x_Location,
+        x_NegotiatedDiscountPercent,
+        x_NegotiatedDiscountSavings,
+        x_Operation,
+        x_OwnerAccountID,
+        x_PartnerCreditApplied,
+        x_PartnerCreditRate,
+        x_PricingBlockSize,
+        x_PricingSubcategory,
+        x_PricingUnitDescription,
+        x_Project,
+        x_PublisherCategory,
+        x_PublisherId,
+        x_ResellerId,
+        x_ResellerName,
+        x_ResourceGroupName,
+        x_ResourceType,
+        x_ServiceCode,
+        x_ServiceId,
+        x_ServiceModel,
+        x_ServicePeriodEnd,
+        x_ServicePeriodStart,
+        x_SkuCoreCount,
+        x_SkuDescription,
+        x_SkuDetails,
+        x_SkuInstanceType,
+        x_SkuIsCreditEligible,
+        x_SkuLicenseQuantity,
+        x_SkuLicenseStatus,
+        x_SkuLicenseType,
+        x_SkuLicenseUnit,
+        x_SkuMeterCategory,
+        x_SkuMeterId,
+        x_SkuMeterSubcategory,
+        x_SkuOfferId,
+        x_SkuOperatingSystem,
+        x_SkuOrderId,
+        x_SkuOrderName,
+        x_SkuPartNumber,
+        x_SkuPlanName,
+        x_SkuRegion,
+        x_SkuServiceFamily,
+        x_SkuTerm,
+        x_SkuTier,
+        x_SourceChanges,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceValues,
+        x_SourceVersion,
+        x_SubproductName,
+        x_TotalDiscountPercent,
+        x_TotalSavings,
+        x_UsageType
+}
+//
+// Prices_final_v1_2
+.create-or-alter function
+with (docstring = 'Gets all prices aligned to FOCUS 1.2.', folder = 'Prices')
+Prices_v1_2()
+{
+    database('Ingestion').Prices_final_v1_2
+    | union (
+        database('Ingestion').Prices_final_v1_0
+        // Convert decimal to real
+        | extend
+            ContractedUnitPrice                  = toreal(ContractedUnitPrice),
+            ListUnitPrice                        = toreal(ListUnitPrice),
+            x_BaseUnitPrice                      = toreal(x_BaseUnitPrice),
+            x_ContractedUnitPriceDiscount        = toreal(x_ContractedUnitPriceDiscount),
+            x_ContractedUnitPriceDiscountPercent = toreal(x_ContractedUnitPriceDiscountPercent),
+            x_EffectiveUnitPrice                 = toreal(x_EffectiveUnitPrice),
+            x_EffectiveUnitPriceDiscount         = toreal(x_EffectiveUnitPriceDiscount),
+            x_EffectiveUnitPriceDiscountPercent  = toreal(x_EffectiveUnitPriceDiscountPercent),
+            x_PricingBlockSize                   = toreal(x_PricingBlockSize),
+            x_SkuIncludedQuantity                = toreal(x_SkuIncludedQuantity),
+            x_SkuTier                            = toreal(x_SkuTier),
+            x_TotalUnitPriceDiscount             = toreal(x_TotalUnitPriceDiscount),
+            x_TotalUnitPriceDiscountPercent      = toreal(x_TotalUnitPriceDiscountPercent) 
+        // Rename columns
+        | project-rename
+            PricingCurrency = x_PricingCurrency,
+            SkuMeter = x_SkuMeterName
+    )
+    | project
+        BillingAccountId,
+        BillingAccountName,
+        BillingCurrency,
+        ChargeCategory,
+        CommitmentDiscountCategory,
+        CommitmentDiscountType,
+        CommitmentDiscountUnit,
+        ContractedUnitPrice,
+        ListUnitPrice,
+        PricingCategory,
+        PricingCurrency,
+        PricingUnit,
+        SkuId,
+        SkuMeter,
+        SkuPriceId,
+        SkuPriceIdv2,
+        x_BaseUnitPrice,
+        x_BillingAccountAgreement,
+        x_BillingAccountId,
+        x_BillingProfileId,
+        x_CommitmentDiscountNormalizedRatio,
+        x_CommitmentDiscountSpendEligibility,
+        x_CommitmentDiscountUsageEligibility,
+        x_ContractedUnitPriceDiscount,
+        x_ContractedUnitPriceDiscountPercent,
+        x_EffectivePeriodEnd,
+        x_EffectivePeriodStart,
+        x_EffectiveUnitPrice,
+        x_EffectiveUnitPriceDiscount,
+        x_EffectiveUnitPriceDiscountPercent,
+        x_IngestionTime,
+        x_PricingBlockSize,
+        x_PricingSubcategory,
+        x_PricingUnitDescription,
+        x_SkuDescription,
+        x_SkuId,
+        x_SkuIncludedQuantity,
+        x_SkuMeterCategory,
+        x_SkuMeterId,
+        x_SkuMeterSubcategory,
+        x_SkuMeterType,
+        x_SkuPriceType,
+        x_SkuProductId,
+        x_SkuRegion,
+        x_SkuServiceFamily,
+        x_SkuOfferId,
+        x_SkuPartNumber,
+        x_SkuTerm,
+        x_SkuTier,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion,
+        x_TotalUnitPriceDiscount,
+        x_TotalUnitPriceDiscountPercent
+}
+//
+// Recommendations_final_v1_2
+.create-or-alter function
+with (docstring = 'Gets all recommendations aligned to FOCUS 1.2.', folder = 'Recommendations')
+Recommendations_v1_2()
+{
+    database('Ingestion').Recommendations_final_v1_2
+    | union (
+        database('Ingestion').Recommendations_final_v1_0
+        // Convert decimal to real
+        | extend
+            x_EffectiveCostAfter   = toreal(x_EffectiveCostAfter),
+            x_EffectiveCostBefore  = toreal(x_EffectiveCostBefore),
+            x_EffectiveCostSavings = toreal(x_EffectiveCostSavings)
+    )
+    | project
+        ProviderName,
+        ResourceId,
+        ResourceName,
+        ResourceType,
+        SubAccountId,
+        SubAccountName,
+        x_EffectiveCostAfter,
+        x_EffectiveCostBefore,
+        x_EffectiveCostSavings,
+        x_IngestionTime,
+        x_RecommendationCategory,
+        x_RecommendationDate,
+        x_RecommendationDescription,
+        x_RecommendationDetails,
+        x_RecommendationId,
+        x_ResourceGroupName,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion
+}
+//
+// Transactions_final_v1_2
+.create-or-alter function
+with (docstring = 'Gets all transactions aligned to FOCUS 1.2.', folder = 'Transactions')
+Transactions_v1_2()
+{
+    database('Ingestion').Transactions_final_v1_2
+    | union (
+        database('Ingestion').Transactions_final_v1_0
+        // Convert decimal to real
+        | extend
+            BilledCost           = toreal(BilledCost),
+            PricingQuantity      = toreal(PricingQuantity),
+            x_MonetaryCommitment = toreal(x_MonetaryCommitment),
+            x_Overage            = toreal(x_Overage)
+        // Rename columns
+        | project-rename
+            InvoiceId = x_InvoiceId
+    )
+    | project
+        BilledCost,
+        BillingAccountId,
+        BillingAccountName,
+        BillingCurrency,
+        BillingPeriodEnd,
+        BillingPeriodStart,
+        ChargeCategory,
+        ChargeClass,
+        ChargeDescription,
+        ChargeFrequency,
+        ChargePeriodStart,
+        InvoiceId,
+        PricingQuantity,
+        PricingUnit,
+        ProviderName,
+        RegionId,
+        RegionName,
+        SubAccountId,
+        SubAccountName,
+        x_AccountName,
+        x_AccountOwnerId,
+        x_CostCenter,
+        x_InvoiceNumber,
+        x_InvoiceSectionId,
+        x_InvoiceSectionName,
+        x_IngestionTime,
+        x_MonetaryCommitment,
+        x_Overage,
+        x_PurchasingBillingAccountId,
+        x_SkuOrderId,
+        x_SkuOrderName,
+        x_SkuSize,
+        x_SkuTerm,
+        x_SourceName,
+        x_SourceProvider,
+        x_SourceType,
+        x_SourceVersion,
+        x_SubscriptionId,
+        x_TransactionType
+}
+//
+//======================================================================================================================
+// Latest FOCUS version
+//======================================================================================================================
+//
+.create-or-alter function
+with (docstring = 'Gets all commitment discount usage records with the latest supported version of the FOCUS schema.', folder = 'CommitmentDiscountUsage')
+CommitmentDiscountUsage()
+{
+    CommitmentDiscountUsage_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all cost and usage records with the latest supported version of the FOCUS schema.', folder = 'Costs')
+Costs()
+{
+    Costs_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all prices with the latest supported version of the FOCUS schema.', folder = 'Prices')
+Prices()
+{
+    Prices_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all recommendations with the latest supported version of the FOCUS schema.', folder = 'Recommendations')
+Recommendations()
+{
+    Recommendations_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all transactions with the latest supported version of the FOCUS schema.', folder = 'Transactions')
+Transactions()
+{
+    Transactions_v1_2()
+}
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+//
+//======================================================================================================================
+// Hub database / Latest FOCUS version functions
+// Used for ad hoc queries.
+//======================================================================================================================
+//
+// For allowed commands, see https://learn.microsoft.com/azure/data-explorer/database-script
+//
+.create-or-alter function
+with (docstring = 'Gets all commitment discount usage records with the latest supported version of the FOCUS schema.', folder = 'CommitmentDiscountUsage')
+CommitmentDiscountUsage()
+{
+    CommitmentDiscountUsage_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all cost and usage records with the latest supported version of the FOCUS schema.', folder = 'Costs')
+Costs()
+{
+    Costs_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all prices with the latest supported version of the FOCUS schema.', folder = 'Prices')
+Prices()
+{
+    Prices_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all recommendations with the latest supported version of the FOCUS schema.', folder = 'Recommendations')
+Recommendations()
+{
+    Recommendations_v1_2()
+}
+//
+.create-or-alter function
+with (docstring = 'Gets all transactions with the latest supported version of the FOCUS schema.', folder = 'Transactions')
+Transactions()
+{
+    Transactions_v1_2()
+}
+

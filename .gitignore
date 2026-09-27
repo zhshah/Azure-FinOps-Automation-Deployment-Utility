@@ -1,0 +1,5 @@
+# Transcripts and deployment summaries (they contain tenant, subscription and resource details)
+logs/
+
+# Your own parameter files for unattended runs
+*.local.psd1

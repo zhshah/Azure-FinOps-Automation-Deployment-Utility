@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.39.26.7824",
+      "templateHash": "15712386648226224141"
+    }
+  },
+  "parameters": {
+    "zonesToCreate": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Private DNS zones that do not exist yet and must be created."
+      }
+    },
+    "zonesToLink": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Private DNS zones (existing or created here) that must be linked to the virtual network."
+      }
+    },
+    "virtualNetworkId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of the customer virtual network."
+      }
+    },
+    "linkName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the virtual network link."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags to apply to new zones and links."
+      }
+    }
+  },
+  "resources": [
+    {
+      "copy": {
+        "name": "zone",
+        "count": "[length(parameters('zonesToCreate'))]"
+      },
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2024-06-01",
+      "name": "[parameters('zonesToCreate')[copyIndex()]]",
+      "location": "global",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "copy": {
+        "name": "link",
+        "count": "[length(parameters('zonesToLink'))]"
+      },
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2024-06-01",
+      "name": "[format('{0}/{1}', parameters('zonesToLink')[copyIndex()], parameters('linkName'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "registrationEnabled": false,
+        "resolutionPolicy": "NxDomainRedirect",
+        "virtualNetwork": {
+          "id": "[parameters('virtualNetworkId')]"
+        }
+      },
+      "dependsOn": [
+        "zone"
+      ]
+    }
+  ]
+}

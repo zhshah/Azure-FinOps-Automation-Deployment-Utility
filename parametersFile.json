@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "hubName": {
+      "value": "finops-hub"
+    },
+    "location": {
+      "value": "eastus2"
+    },
+    "storageSku": {
+      "value": "Premium_LRS"
+    },
+    "enableInfrastructureEncryption": {
+      "value": null
+    },
+    "enablePurgeProtection": {
+      "value": null
+    },
+    "remoteHubStorageUri": {
+      "value": null
+    },
+    "remoteHubStorageKey": {
+      "value": null
+    },
+    "enableManagedExports": {
+      "value": null
+    },
+    "enableRecommendations": {
+      "value": null
+    },
+    "enableAHBRecommendations": {
+      "value": null
+    },
+    "enableSpotRecommendations": {
+      "value": null
+    },
+    "dataExplorerName": {
+      "value": null
+    },
+    "dataExplorerSku": {
+      "value": "Dev(No SLA)_Standard_D11_v2"
+    },
+    "dataExplorerCapacity": {
+      "value": null
+    },
+    "fabricQueryUri": {
+      "value": null
+    },
+    "fabricCapacityUnits": {
+      "value": null
+    },
+    "tags": {
+      "value": null
+    },
+    "tagsByResource": {
+      "value": {}
+    },
+    "scopesToMonitor": {
+      "value": null
+    },
+    "exportRetentionInDays": {
+      "value": null
+    },
+    "ingestionRetentionInMonths": {
+      "value": null
+    },
+    "dataExplorerRawRetentionInDays": {
+      "value": null
+    },
+    "dataExplorerFinalRetentionInMonths": {
+      "value": 13
+    },
+    "enablePublicAccess": {
+      "value": false
+    },
+    "virtualNetworkAddressPrefix": {
+      "value": null
+    }
+  }
+}
